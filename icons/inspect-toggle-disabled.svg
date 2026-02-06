@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <!-- 开关指示点（灰色-禁用） -->
+  <circle cx="2.5" cy="2.5" r="1.8" fill="#888"/>
+  <!-- 眼睛外轮廓 -->
+  <path d="M1 9C1 9 4 5 8.5 5C13 5 15.5 9 15.5 9C15.5 9 13 13 8.5 13C4 13 1 9 1 9Z" fill="none" stroke="#888" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- 瞳孔（指针形态-灰色） -->
+  <path d="M7 7L7 11L8.5 9.5L10 11.5L11 10.8L9.5 9L11 8L7 7Z" fill="#999"/>
+  <!-- 眼睛虹膜 -->
+  <circle cx="8.5" cy="9" r="2.5" fill="none" stroke="#999" stroke-width="0.7"/>
+</svg>

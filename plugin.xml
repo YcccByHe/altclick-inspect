@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension point="org.eclipse.ui.startup">
+      <startup class="com.eclipse.altclick.inspect.AltClickStartup">
+      </startup>
+   </extension>
+
+   <extension point="org.eclipse.ui.commands">
+      <category
+            id="com.eclipse.altclick.inspect.commands.category"
+            name="Quick Inspect">
+      </category>
+      <command
+            categoryId="com.eclipse.altclick.inspect.commands.category"
+            id="com.eclipse.altclick.inspect.commands.toggleEnabled"
+            name="Quick Inspect">
+         <state
+               class="org.eclipse.ui.handlers.RegistryToggleState:true"
+               id="org.eclipse.ui.commands.toggleState">
+         </state>
+      </command>
+   </extension>
+
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            class="com.eclipse.altclick.inspect.ToggleAltClickHandler"
+            commandId="com.eclipse.altclick.inspect.commands.toggleEnabled">
+      </handler>
+   </extension>
+
+   <extension point="org.eclipse.ui.menus">
+      <menuContribution locationURI="toolbar:org.eclipse.debug.ui.main.toolbar?after=renderGroup">
+         <command
+               commandId="com.eclipse.altclick.inspect.commands.toggleEnabled"
+               icon="icons/inspect-toggle.svg"
+               label="Quick Inspect"
+               style="toggle"
+               tooltip="Quick Inspect">
+         </command>
+      </menuContribution>
+   </extension>
+
+   <extension point="org.eclipse.ui.preferencePages">
+      <page
+            class="com.eclipse.altclick.inspect.AltClickPreferencePage"
+            id="com.eclipse.altclick.inspect.preferences.main"
+            name="AltClick Inspect">
+      </page>
+   </extension>
+</plugin>
