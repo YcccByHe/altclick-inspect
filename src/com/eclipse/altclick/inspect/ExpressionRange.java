@@ -25,13 +25,6 @@ public class ExpressionRange {
         return offset >= start && offset < getEnd();
     }
 
-    public boolean containsRange(ExpressionRange other) {
-        if (other == null) {
-            return false;
-        }
-        return start <= other.start && getEnd() >= other.getEnd();
-    }
-
     public boolean isSameRange(ExpressionRange other) {
         if (other == null) {
             return false;

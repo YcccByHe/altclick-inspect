@@ -1,7 +1,9 @@
 package com.eclipse.altclick.inspect;
 
-import org.eclipse.jface.text.ITextViewer;
-import org.eclipse.jface.text.ITextViewerExtension5;
+import org.eclipse.jface.text.IRegion;
+import org.eclipse.jface.text.ITextPresentationListener;
+import org.eclipse.jface.text.TextPresentation;
+import org.eclipse.jface.text.TextViewer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
@@ -10,28 +12,26 @@ import org.eclipse.swt.events.KeyListener;
 import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.events.MouseMoveListener;
 import org.eclipse.swt.events.MouseTrackListener;
-import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Point;
 
-public class AltHoverHighlighter implements MouseMoveListener, MouseTrackListener, KeyListener {
-    private final ITextViewer viewer;
+public class AltHoverHighlighter
+        implements MouseMoveListener, MouseTrackListener, KeyListener, ITextPresentationListener {
+    private final TextViewer viewer;
     private final StyledText text;
     private final ExpressionResolver resolver = new ExpressionResolver();
 
     private ExpressionRange activeRange;
-    private int activeWidgetStart = -1;
-    private int activeWidgetLength = 0;
-    private StyleRange[] replacedStyleRanges;
+    private boolean handCursorActive;
 
-    public AltHoverHighlighter(ITextViewer viewer) {
+    public AltHoverHighlighter(TextViewer viewer) {
         this.viewer = viewer;
-        this.text = viewer != null ? viewer.getTextWidget() : null;
+        this.text = viewer.getTextWidget();
     }
 
     @Override
     public void mouseMove(MouseEvent e) {
-        if (!FeatureTogglePreferences.isEnabled()
-                || !isAltPressed(e.stateMask)
+        if ((e.stateMask & SWT.ALT) == 0
+                || !FeatureTogglePreferences.isEnabled()
                 || !DebugContextChecker.isSuspended()) {
             clear();
             return;
@@ -55,10 +55,6 @@ public class AltHoverHighlighter implements MouseMoveListener, MouseTrackListene
     @Override
     public void keyPressed(KeyEvent e) {
         if (e.keyCode == SWT.ALT) {
-            if (!FeatureTogglePreferences.isEnabled()) {
-                clear();
-                return;
-            }
             refreshAtCursorPosition();
         }
     }
@@ -70,154 +66,87 @@ public class AltHoverHighlighter implements MouseMoveListener, MouseTrackListene
         }
     }
 
-    public ExpressionRange getActiveRange() {
-        return activeRange;
+    @Override
+    public void applyTextPresentation(TextPresentation presentation) {
+        if (activeRange == null) {
+            return;
+        }
+        IRegion extent = presentation.getExtent();
+        if (extent == null
+                || activeRange.getEnd() <= extent.getOffset()
+                || extent.getOffset() + extent.getLength() <= activeRange.getStart()) {
+            return;
+        }
+        StyleRange styleRange = new StyleRange(
+                activeRange.getStart(),
+                activeRange.getLength(),
+                text.getDisplay().getSystemColor(SWT.COLOR_LINK_FOREGROUND),
+                null);
+        styleRange.underline = true;
+        styleRange.underlineStyle = SWT.UNDERLINE_LINK;
+        presentation.mergeStyleRange(styleRange);
     }
 
     public ExpressionRange resolveAtPoint(int x, int y) {
-        if (viewer == null || text == null || text.isDisposed()) {
+        int widgetOffset = text.getOffsetAtPoint(new Point(x, y));
+        if (widgetOffset > 0 && text.getLocationAtOffset(widgetOffset).x > x) {
+            widgetOffset--;
+        }
+        if (widgetOffset < 0) {
             return null;
         }
-        return resolver.resolveAtPoint(viewer, x, y, activeRange);
-    }
-
-    public ExpressionRange resolveAtPointForClick(int x, int y) {
-        if (viewer == null || text == null || text.isDisposed()) {
+        int modelOffset = viewer.widgetOffset2ModelOffset(widgetOffset);
+        if (modelOffset < 0) {
             return null;
         }
-        return resolver.resolveAtPoint(viewer, x, y, null);
+        return resolver.resolve(viewer.getDocument(), modelOffset);
     }
 
     public void applyRange(ExpressionRange range) {
-        if (viewer == null || text == null || text.isDisposed()) {
-            return;
-        }
         if (range == null) {
             clear();
             return;
         }
-
-        ITextViewerExtension5 extension = viewer instanceof ITextViewerExtension5
-                ? (ITextViewerExtension5) viewer
-                : null;
-        if (extension == null) {
-            clear();
-            return;
+        if (!range.isSameRange(activeRange)) {
+            ExpressionRange previous = activeRange;
+            activeRange = range;
+            invalidate(previous);
+            invalidate(range);
         }
-
-        int widgetStart = extension.modelOffset2WidgetOffset(range.getStart());
-        int widgetEnd = extension.modelOffset2WidgetOffset(range.getEnd());
-        if (widgetStart < 0 || widgetEnd < 0 || widgetEnd <= widgetStart) {
-            clear();
-            return;
-        }
-
-        int widgetLength = widgetEnd - widgetStart;
-        if (activeRange != null
-                && activeRange.isSameRange(range)
-                && activeWidgetStart == widgetStart
-                && activeWidgetLength == widgetLength) {
+        if (!handCursorActive) {
             text.setCursor(text.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
-            return;
+            handCursorActive = true;
         }
-
-        clearStyleOnly();
-        replacedStyleRanges = text.getStyleRanges(widgetStart, widgetLength, true);
-        StyleRange styleRange = new StyleRange(widgetStart, widgetLength, null, null);
-        styleRange.background = resolveBackground(widgetStart, replacedStyleRanges);
-        styleRange.foreground = text.getDisplay().getSystemColor(SWT.COLOR_LINK_FOREGROUND);
-        styleRange.underline = true;
-        styleRange.underlineStyle = SWT.UNDERLINE_LINK;
-        text.setStyleRange(styleRange);
-        text.setCursor(text.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
-
-        activeRange = range;
-        activeWidgetStart = widgetStart;
-        activeWidgetLength = widgetLength;
     }
 
     public void clear() {
-        if (text == null || text.isDisposed()) {
-            return;
+        if (activeRange != null) {
+            ExpressionRange previous = activeRange;
+            activeRange = null;
+            invalidate(previous);
         }
-        clearStyleOnly();
-        text.setCursor(null);
-        activeRange = null;
-    }
-
-    private void clearStyleOnly() {
-        if (text == null || text.isDisposed()) {
-            return;
+        if (handCursorActive) {
+            text.setCursor(null);
+            handCursorActive = false;
         }
-        if (activeWidgetStart < 0 || activeWidgetLength <= 0) {
-            activeWidgetStart = -1;
-            activeWidgetLength = 0;
-            replacedStyleRanges = null;
-            return;
-        }
-        if (replacedStyleRanges != null) {
-            text.replaceStyleRanges(activeWidgetStart, activeWidgetLength, cloneRanges(replacedStyleRanges));
-        } else {
-            StyleRange clearRange = new StyleRange(activeWidgetStart, activeWidgetLength, null, null);
-            clearRange.foreground = null;
-            clearRange.background = null;
-            clearRange.underline = false;
-            text.setStyleRange(clearRange);
-        }
-        viewer.invalidateTextPresentation();
-        activeWidgetStart = -1;
-        activeWidgetLength = 0;
-        replacedStyleRanges = null;
     }
 
     private void refreshAtCursorPosition() {
-        if (text == null
-                || text.isDisposed()
-                || !FeatureTogglePreferences.isEnabled()
-                || !DebugContextChecker.isSuspended()) {
+        if (!FeatureTogglePreferences.isEnabled() || !DebugContextChecker.isSuspended()) {
             clear();
             return;
         }
         Point cursor = text.toControl(text.getDisplay().getCursorLocation());
-        if (cursor.x < 0 || cursor.y < 0 || cursor.x > text.getClientArea().width
-                || cursor.y > text.getClientArea().height) {
+        if (!text.getClientArea().contains(cursor)) {
             clear();
             return;
         }
         applyRange(resolveAtPoint(cursor.x, cursor.y));
     }
 
-    private boolean isAltPressed(int stateMask) {
-        return (stateMask & SWT.ALT) != 0;
-    }
-
-    private Color resolveBackground(int widgetStart, StyleRange[] styles) {
-        if (styles != null) {
-            for (StyleRange style : styles) {
-                if (style != null && style.background != null) {
-                    return style.background;
-                }
-            }
+    private void invalidate(ExpressionRange range) {
+        if (range != null) {
+            viewer.invalidateTextPresentation(range.getStart(), range.getLength());
         }
-        if (text == null || text.isDisposed()) {
-            return null;
-        }
-        try {
-            int line = text.getLineAtOffset(widgetStart);
-            return text.getLineBackground(line);
-        } catch (IllegalArgumentException ex) {
-            return null;
-        }
-    }
-
-    private StyleRange[] cloneRanges(StyleRange[] ranges) {
-        if (ranges == null) {
-            return null;
-        }
-        StyleRange[] cloned = new StyleRange[ranges.length];
-        for (int i = 0; i < ranges.length; i++) {
-            cloned[i] = new StyleRange(ranges[i]);
-        }
-        return cloned;
     }
 }

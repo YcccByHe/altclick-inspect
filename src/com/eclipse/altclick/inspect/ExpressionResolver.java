@@ -3,7 +3,10 @@ package com.eclipse.altclick.inspect;
 import org.eclipse.jdt.core.dom.AST;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.ASTParser;
+import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.ArrayAccess;
+import org.eclipse.jdt.core.dom.Assignment;
+import org.eclipse.jdt.core.dom.ClassInstanceCreation;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.DoStatement;
 import org.eclipse.jdt.core.dom.EnhancedForStatement;
@@ -13,21 +16,22 @@ import org.eclipse.jdt.core.dom.IfStatement;
 import org.eclipse.jdt.core.dom.InfixExpression;
 import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.NodeFinder;
+import org.eclipse.jdt.core.dom.PostfixExpression;
+import org.eclipse.jdt.core.dom.PrefixExpression;
 import org.eclipse.jdt.core.dom.QualifiedName;
 import org.eclipse.jdt.core.dom.Statement;
+import org.eclipse.jdt.core.dom.SuperMethodInvocation;
 import org.eclipse.jdt.core.dom.SwitchStatement;
 import org.eclipse.jdt.core.dom.WhileStatement;
 import org.eclipse.jface.text.BadLocationException;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.IDocumentExtension4;
-import org.eclipse.jface.text.ITextViewer;
-import org.eclipse.jface.text.ITextViewerExtension5;
-import org.eclipse.swt.graphics.Point;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 public class ExpressionResolver {
     private static final int[] OFFSET_DELTAS = {0, -1, 1, -2, 2};
@@ -36,62 +40,13 @@ public class ExpressionResolver {
     private long cachedModificationStamp = IDocumentExtension4.UNKNOWN_MODIFICATION_STAMP;
     private CompilationUnit cachedCompilationUnit;
 
-    public ExpressionRange resolveAtPoint(
-            ITextViewer viewer,
-            int x,
-            int y,
-            ExpressionRange activeRange) {
-        if (viewer == null || viewer.getTextWidget() == null) {
-            return null;
-        }
-        if (viewer.getTextWidget().isDisposed()) {
-            return null;
-        }
-
-        ITextViewerExtension5 extension = viewer instanceof ITextViewerExtension5
-                ? (ITextViewerExtension5) viewer
-                : null;
-        if (extension == null) {
-            return null;
-        }
-
-        final int widgetOffset;
-        try {
-            widgetOffset = viewer.getTextWidget().getOffsetAtPoint(new Point(x, y));
-        } catch (IllegalArgumentException ex) {
-            return null;
-        }
-
-        int modelOffset = extension.widgetOffset2ModelOffset(widgetOffset);
-        if (modelOffset < 0) {
-            return null;
-        }
-        return resolveAtModelOffset(viewer, modelOffset, activeRange);
-    }
-
-    public ExpressionRange resolveAtModelOffset(
-            ITextViewer viewer,
-            int modelOffset,
-            ExpressionRange activeRange) {
-        IDocument document = viewer != null ? viewer.getDocument() : null;
+    public ExpressionRange resolve(IDocument document, int modelOffset) {
         if (document == null || document.getLength() == 0) {
             return null;
         }
-
-        int safeOffset = Math.max(0, Math.min(modelOffset, document.getLength() - 1));
-        int anchor = findAnchor(document, safeOffset);
-        if (anchor < 0) {
-            return null;
-        }
-
-        List<Candidate> candidates = collectCandidates(document, anchor);
-        List<Candidate> containing = filterContaining(candidates, safeOffset);
-
-        ExpressionRange selected = selectPreferredRange(document, safeOffset, containing, candidates);
-        if (selected != null) {
-            return selected;
-        }
-        return null;
+        int offset = Math.max(0, Math.min(modelOffset, document.getLength() - 1));
+        List<Candidate> candidates = collectCandidates(document, offset);
+        return selectPreferredRange(document, offset, filterContaining(candidates, offset), candidates);
     }
 
     private List<Candidate> collectCandidates(IDocument document, int anchor) {
@@ -111,7 +66,7 @@ public class ExpressionResolver {
             if (node == null) {
                 continue;
             }
-            collectFromNodePath(node, anchor, unique, document, document.getLength());
+            collectFromNodePath(node, anchor, unique, document);
         }
         candidates.addAll(unique.values());
         candidates.sort((a, b) -> Integer.compare(a.range.getLength(), b.range.getLength()));
@@ -122,87 +77,50 @@ public class ExpressionResolver {
             ASTNode node,
             int anchor,
             Map<String, Candidate> unique,
-            IDocument document,
-            int documentLength) {
+            IDocument document) {
         for (ASTNode cursor = node; cursor != null; cursor = cursor.getParent()) {
             if (cursor instanceof Expression) {
-                addCandidate(unique, (Expression) cursor, false, documentLength, anchor);
-            }
-            if (cursor instanceof IfStatement) {
-                IfStatement statement = (IfStatement) cursor;
-                addControlConditionCandidate(
-                        unique,
-                        statement,
-                        statement.getExpression(),
-                        anchor,
-                        document,
-                        documentLength);
-            } else if (cursor instanceof WhileStatement) {
-                WhileStatement statement = (WhileStatement) cursor;
-                addControlConditionCandidate(
-                        unique,
-                        statement,
-                        statement.getExpression(),
-                        anchor,
-                        document,
-                        documentLength);
-            } else if (cursor instanceof DoStatement) {
-                DoStatement statement = (DoStatement) cursor;
-                addControlConditionCandidate(
-                        unique,
-                        statement,
-                        statement.getExpression(),
-                        anchor,
-                        document,
-                        documentLength);
-            } else if (cursor instanceof EnhancedForStatement) {
-                EnhancedForStatement statement = (EnhancedForStatement) cursor;
-                addControlConditionCandidate(
-                        unique,
-                        statement,
-                        statement.getExpression(),
-                        anchor,
-                        document,
-                        documentLength);
-            } else if (cursor instanceof ForStatement) {
-                ForStatement statement = (ForStatement) cursor;
-                addControlConditionCandidate(
-                        unique,
-                        statement,
-                        statement.getExpression(),
-                        anchor,
-                        document,
-                        documentLength);
-            } else if (cursor instanceof SwitchStatement) {
-                SwitchStatement statement = (SwitchStatement) cursor;
-                addControlConditionCandidate(
-                        unique,
-                        statement,
-                        statement.getExpression(),
-                        anchor,
-                        document,
-                        documentLength);
+                addCandidate(unique, (Expression) cursor, false, document.getLength(), anchor);
+            } else if (cursor instanceof Statement) {
+                addKeywordConditionCandidate(unique, (Statement) cursor, anchor, document);
             }
         }
     }
 
-    private void addControlConditionCandidate(
+    private void addKeywordConditionCandidate(
             Map<String, Candidate> unique,
             Statement statement,
-            Expression expression,
             int anchor,
-            IDocument document,
-            int documentLength) {
-        if (expression == null) {
+            IDocument document) {
+        Expression condition = conditionOf(statement);
+        if (condition == null
+                || !isOnControlKeywordToken(document, statement, condition.getStartPosition(), anchor)
+                || containsNode(condition, ExpressionResolver::isInvocation)) {
             return;
         }
-        int expressionStart = expression.getStartPosition();
-        int expressionEnd = expressionStart + expression.getLength();
-        boolean inKeyword = isOnControlKeywordToken(document, statement, expressionStart, anchor);
-        boolean inExpression = anchor >= expressionStart && anchor < expressionEnd;
-        if (inKeyword || inExpression) {
-            addCandidate(unique, expression, inKeyword, documentLength, anchor);
+        addCandidate(unique, condition, true, document.getLength(), anchor);
+    }
+
+    private Expression conditionOf(Statement statement) {
+        if (statement instanceof IfStatement) {
+            return ((IfStatement) statement).getExpression();
         }
+        if (statement instanceof WhileStatement) {
+            return ((WhileStatement) statement).getExpression();
+        }
+        if (statement instanceof DoStatement) {
+            return ((DoStatement) statement).getExpression();
+        }
+        if (statement instanceof ForStatement) {
+            return ((ForStatement) statement).getExpression();
+        }
+        if (statement instanceof EnhancedForStatement) {
+            return ((EnhancedForStatement) statement).getExpression();
+        }
+        if (statement instanceof SwitchStatement) {
+            return ((SwitchStatement) statement).getExpression();
+        }
+        return null;
     }
 
     private void addCandidate(
@@ -211,9 +129,6 @@ public class ExpressionResolver {
             boolean keywordBoost,
             int documentLength,
             int anchor) {
-        if (expression == null) {
-            return;
-        }
         if (!isEvaluableExpression(expression, anchor, keywordBoost)) {
             return;
         }
@@ -245,7 +160,6 @@ public class ExpressionResolver {
                 containing.add(candidate);
             }
         }
-        containing.sort((a, b) -> Integer.compare(a.range.getLength(), b.range.getLength()));
         return containing;
     }
 
@@ -336,9 +250,6 @@ public class ExpressionResolver {
     }
 
     private boolean isEvaluableExpression(Expression expression, int anchor, boolean keywordBoost) {
-        if (expression == null) {
-            return false;
-        }
         if (expression instanceof org.eclipse.jdt.core.dom.Annotation
                 || expression instanceof org.eclipse.jdt.core.dom.LambdaExpression
                 || expression instanceof org.eclipse.jdt.core.dom.TypeLiteral
@@ -369,7 +280,37 @@ public class ExpressionResolver {
                 return false;
             }
         }
-        return true;
+        return !containsNode(expression, ExpressionResolver::isMutation);
+    }
+
+    private static boolean containsNode(Expression expression, Predicate<ASTNode> matcher) {
+        boolean[] found = new boolean[1];
+        expression.accept(new ASTVisitor() {
+            @Override
+            public boolean preVisit2(ASTNode node) {
+                found[0] = found[0] || matcher.test(node);
+                return !found[0];
+            }
+        });
+        return found[0];
+    }
+
+    private static boolean isMutation(ASTNode node) {
+        if (node instanceof Assignment || node instanceof PostfixExpression) {
+            return true;
+        }
+        if (!(node instanceof PrefixExpression)) {
+            return false;
+        }
+        PrefixExpression.Operator operator = ((PrefixExpression) node).getOperator();
+        return operator == PrefixExpression.Operator.INCREMENT
+                || operator == PrefixExpression.Operator.DECREMENT;
+    }
+
+    private static boolean isInvocation(ASTNode node) {
+        return node instanceof MethodInvocation
+                || node instanceof SuperMethodInvocation
+                || node instanceof ClassInstanceCreation;
     }
 
     private boolean isInsideTypeContext(Expression expression) {
@@ -397,44 +338,40 @@ public class ExpressionResolver {
     private boolean isOnControlKeywordToken(
             IDocument document,
             Statement statement,
-            int expressionStart,
+            int conditionStart,
             int anchor) {
-        if (document == null || anchor < 0 || anchor >= document.getLength()) {
+        int searchStart = keywordSearchStart(statement);
+        if (searchStart < 0) {
             return false;
         }
-        String expectedKeyword = expectedKeyword(statement);
-        if (expectedKeyword == null) {
+        int keywordStart = skipWhitespaceForward(document, searchStart, conditionStart);
+        if (keywordStart < 0 || keywordStart >= conditionStart) {
             return false;
         }
-        int statementStart = statement.getStartPosition();
-        if (statementStart < 0 || statementStart >= expressionStart) {
-            return false;
-        }
-
-        int keywordStart = skipWhitespaceForward(document, statementStart, expressionStart);
-        if (keywordStart < 0 || keywordStart >= expressionStart) {
-            return false;
-        }
-        int keywordEnd = readIdentifierEnd(document, keywordStart, expressionStart);
-        if (keywordEnd <= keywordStart) {
+        int keywordEnd = readIdentifierEnd(document, keywordStart, conditionStart);
+        if (anchor < keywordStart || anchor >= keywordEnd) {
             return false;
         }
         try {
-            String actualKeyword = document.get(keywordStart, keywordEnd - keywordStart);
-            if (!expectedKeyword.equals(actualKeyword)) {
-                return false;
-            }
+            return document.get(keywordStart, keywordEnd - keywordStart).equals(expectedKeyword(statement));
         } catch (BadLocationException ex) {
             return false;
         }
-        return anchor >= keywordStart && anchor < keywordEnd;
+    }
+
+    private int keywordSearchStart(Statement statement) {
+        if (statement instanceof DoStatement) {
+            Statement body = ((DoStatement) statement).getBody();
+            return body.getStartPosition() + body.getLength();
+        }
+        return statement.getStartPosition();
     }
 
     private String expectedKeyword(Statement statement) {
         if (statement instanceof IfStatement) {
             return "if";
         }
-        if (statement instanceof WhileStatement) {
+        if (statement instanceof WhileStatement || statement instanceof DoStatement) {
             return "while";
         }
         if (statement instanceof ForStatement || statement instanceof EnhancedForStatement) {
@@ -519,8 +456,7 @@ public class ExpressionResolver {
 
     private boolean isReceiverOrQualifierLink(ASTNode parent, ASTNode child) {
         if (parent instanceof MethodInvocation) {
-            MethodInvocation invocation = (MethodInvocation) parent;
-            return invocation.getExpression() == child || invocation.getName() == child;
+            return ((MethodInvocation) parent).getName() == child;
         }
         if (parent instanceof QualifiedName) {
             return ((QualifiedName) parent).getQualifier() == child;
@@ -566,9 +502,6 @@ public class ExpressionResolver {
     }
 
     private char charAtSafe(IDocument document, int offset) {
-        if (document == null) {
-            return '\0';
-        }
         if (offset < 0 || offset >= document.getLength()) {
             return '\0';
         }
@@ -580,9 +513,6 @@ public class ExpressionResolver {
     }
 
     private char findNonWhitespaceBackward(IDocument document, int offset) {
-        if (document == null) {
-            return '\0';
-        }
         int index = Math.min(offset - 1, document.getLength() - 1);
         while (index >= 0) {
             char current = charAtSafe(document, index);
@@ -598,9 +528,6 @@ public class ExpressionResolver {
     }
 
     private char findNonWhitespaceForward(IDocument document, int offset) {
-        if (document == null) {
-            return '\0';
-        }
         int index = Math.max(offset + 1, 0);
         while (index < document.getLength()) {
             char current = charAtSafe(document, index);
@@ -622,26 +549,12 @@ public class ExpressionResolver {
     }
 
     private boolean containsOffset(Expression expression, int offset) {
-        if (expression == null) {
-            return false;
-        }
         int start = expression.getStartPosition();
         int end = start + expression.getLength();
         return offset >= start && offset < end;
     }
 
-    private int findAnchor(IDocument document, int offset) {
-        int len = document.getLength();
-        if (len == 0) {
-            return -1;
-        }
-        return Math.max(0, Math.min(offset, len - 1));
-    }
-
     private CompilationUnit getCompilationUnit(IDocument document) {
-        if (document == null) {
-            return null;
-        }
         long stamp = getModificationStamp(document);
         if (cachedCompilationUnit != null
                 && cachedDocument == document

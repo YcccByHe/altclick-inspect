@@ -1,16 +1,15 @@
 package com.eclipse.altclick.inspect;
 
+import org.eclipse.jdt.ui.JavaUI;
 import org.eclipse.jface.text.ITextViewer;
+import org.eclipse.jface.text.TextViewer;
 import org.eclipse.swt.custom.StyledText;
-import org.eclipse.swt.events.DisposeListener;
 import org.eclipse.ui.IPartListener2;
+import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.texteditor.ITextEditor;
 
 public class EditorPartListener implements IPartListener2 {
-    private static final String DATA_KEY =
-            "com.eclipse.altclick.inspect.listenerHook";
-
     @Override
     public void partOpened(IWorkbenchPartReference partRef) {
         register(partRef);
@@ -48,38 +47,34 @@ public class EditorPartListener implements IPartListener2 {
     }
 
     private void register(IWorkbenchPartReference partRef) {
-        if (partRef == null) {
+        if (!isJavaEditor(partRef.getId())) {
             return;
         }
-        if (!(partRef.getPart(false) instanceof ITextEditor)) {
+        IWorkbenchPart part = partRef.getPart(false);
+        if (!(part instanceof ITextEditor)) {
             return;
         }
-        ITextEditor editor = (ITextEditor) partRef.getPart(false);
-        ITextViewer viewer = editor.getAdapter(ITextViewer.class);
-        if (viewer == null || viewer.getTextWidget() == null) {
+        ITextEditor editor = (ITextEditor) part;
+        ITextViewer adapted = editor.getAdapter(ITextViewer.class);
+        if (!(adapted instanceof TextViewer)) {
             return;
         }
-
+        TextViewer viewer = (TextViewer) adapted;
         StyledText text = viewer.getTextWidget();
-        if (text.isDisposed() || text.getData(DATA_KEY) != null) {
+        if (text == null || text.isDisposed() || text.getData(PluginConstants.EDITOR_HOOK_KEY) != null) {
             return;
         }
 
         AltHoverHighlighter highlighter = new AltHoverHighlighter(viewer);
-        AltClickMouseListener clickListener = new AltClickMouseListener(editor, viewer, highlighter);
-        text.setData(DATA_KEY, clickListener);
-        text.addMouseListener(clickListener);
+        text.setData(PluginConstants.EDITOR_HOOK_KEY, new AltClickMouseListener(editor, viewer, highlighter));
+        viewer.addTextPresentationListener(highlighter);
         text.addMouseMoveListener(highlighter);
         text.addMouseTrackListener(highlighter);
         text.addKeyListener(highlighter);
-        DisposeListener disposeListener = e -> {
-            highlighter.clear();
-            text.removeMouseListener(clickListener);
-            text.removeMouseMoveListener(highlighter);
-            text.removeMouseTrackListener(highlighter);
-            text.removeKeyListener(highlighter);
-            text.setData(DATA_KEY, null);
-        };
-        text.addDisposeListener(disposeListener);
+        text.addDisposeListener(e -> viewer.removeTextPresentationListener(highlighter));
+    }
+
+    private boolean isJavaEditor(String editorId) {
+        return JavaUI.ID_CU_EDITOR.equals(editorId) || JavaUI.ID_CF_EDITOR.equals(editorId);
     }
 }
